@@ -11,9 +11,10 @@ import time
 import tkinter as tk
 from urllib.parse import urlsplit
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from nas_config import NAS_USER, NAS_PASSWORD, SHARE_NAME, MOUNT_ROOT
+from nas_paths import create_destination
 
 
 def mounted_devices() -> list[Path]:
@@ -140,19 +141,40 @@ class TransferApp:
                     self.host_combo.current(0)
                     self.append(f"Found {len(hosts)} SMB host(s). Select the NAS and mount it.")
                 else:
-                    self.append("No SMB hosts found. Check network/VPN and try again.")
+                    self.ask_nas_address("No SMB hosts were found on the network.")
             self.ui(done)
         threading.Thread(target=worker, daemon=True).start()
+
+    def ask_nas_address(self, reason: str) -> None:
+        """Called on the UI thread after discovery or mounting fails."""
+        self.busy = False
+        reason = reason.replace(NAS_PASSWORD, "[redacted]")
+        self.append(reason)
+        address = simpledialog.askstring(
+            "Connect to NAS",
+            f"{reason}\n\nEnter the NAS address, for example:\n"
+            "smb://sxd/Ego or 192.168.1.50\n\n"
+            "The saved NAS username and password will be used.",
+            initialvalue=self.host_combo.get(),
+            parent=self.root,
+        )
+        if address and address.strip():
+            self.host_combo.set(address.strip())
+            self.mount_nas()
+        else:
+            self.append("NAS connection cancelled. Enter an address and click Mount to retry.")
 
     def mount_nas(self) -> None:
         if self.busy: return
         address = self.host_combo.get().strip()
-        parsed = urlsplit(address if "://" in address else "smb://" + address)
-        host = parsed.hostname
-        if parsed.scheme != "smb" or parsed.path.strip("/") not in ("", SHARE_NAME):
-            messagebox.showerror("Invalid NAS address", "Use smb://sxd or smb://sxd/Ego."); return
-        if not host:
-            messagebox.showerror("NAS host required", "Find the NAS or select its IP address first."); return
+        try:
+            parsed = urlsplit(address if "://" in address else "smb://" + address)
+            host = parsed.hostname
+            if not host or parsed.scheme != "smb" or parsed.username or parsed.path.strip("/") not in ("", SHARE_NAME):
+                raise ValueError("Use smb://sxd, smb://sxd/Ego, or a NAS IP address.")
+        except ValueError as error:
+            self.root.after(0, self.ask_nas_address, f"Invalid NAS address: {error}")
+            return
         if shutil.which("mount.cifs") is None:
             messagebox.showerror("Missing CIFS tools", "Install cifs-utils (for example: sudo apt install cifs-utils), then retry."); return
         self.busy = True
@@ -176,8 +198,8 @@ class TransferApp:
                 self.ui(self.target.set, f"NAS destination: {MOUNT_ROOT}/ddmmyyyy/datatitle/")
                 self.ui(self.append, f"Mounted {host}:{SHARE_NAME} at {MOUNT_ROOT}")
             except Exception as e:
-                self.ui(self.append, f"Mount failed: {e}")
-            finally:
+                self.ui(self.ask_nas_address, f"Mount failed: {e}")
+            else:
                 self.ui(setattr, self, "busy", False)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -193,13 +215,11 @@ class TransferApp:
             messagebox.showerror("NAS not mounted", "Find and mount the NAS before transferring."); return
         date_dir = time.strftime("%d%m%Y")
         dest = MOUNT_ROOT / date_dir / title
-        if dest.exists():
-            messagebox.showerror("Destination exists", f"Refusing to overwrite existing data:\n{dest}"); return
         files = [p for p in src.rglob("*") if p.is_file() and not p.is_symlink()]
         total = sum(p.stat().st_size for p in files)
         if not files:
             messagebox.showerror("No data", f"No files found under {src}."); return
-        if not messagebox.askyesno("Confirm transfer and erase", f"Copy {len(files)} files ({total / (1024**3):.2f} GiB) to:\n{dest}\n\nAfter size and SHA-256 verification, all contents of {src} will be deleted. Continue?"):
+        if not messagebox.askyesno("Confirm transfer and erase", f"Copy {len(files)} files ({total / (1024**3):.2f} GiB) to:\n{dest}\n\nAn existing destination gets a numbered suffix automatically.\n\nAfter size and SHA-256 verification, all contents of {src} will be deleted. Continue?"):
             return
         self.busy = True
         self.start_btn.state(["disabled"])
@@ -211,7 +231,9 @@ class TransferApp:
         import hashlib
         copied = 0
         try:
-            dest.mkdir(parents=True, exist_ok=False)
+            dest = create_destination(dest)
+            self.ui(self.target.set, f"NAS destination: {dest}")
+            self.ui(self.append, f"Copying to {dest}")
             hashes: list[tuple[Path, str, int]] = []
             for index, source in enumerate(files, 1):
                 rel = source.relative_to(src)

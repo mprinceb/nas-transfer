@@ -17,4 +17,4 @@ trinet-nas-transfer = "nas_transfer:main"
 trinet-nas-transfer-cli = "nas_transfer_cli:main"
 
 [tool.setuptools]
-py-modules = ["nas_transfer", "nas_transfer_cli", "nas_config"]
+py-modules = ["nas_transfer", "nas_transfer_cli", "nas_config", "nas_paths"]

@@ -13,6 +13,7 @@ import tempfile
 from urllib.parse import urlsplit
 
 from nas_config import NAS_USER, NAS_PASSWORD, SHARE_NAME, MOUNT_ROOT
+from nas_paths import create_destination
 
 CHUNK = 4 * 1024 * 1024
 
@@ -121,10 +122,9 @@ def transfer(source, destination, keep_source=False):
                 or source.stat().st_dev != source_device):
             raise RuntimeError('A source or NAS mount changed. Cleanup stopped.')
     total = sum(s[2] for s in files.values())
-    print(f'{len(files)} files, {total / 1024**3:.2f} GiB\nDestination: {destination}', flush=True)
     check_mounts()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.mkdir(exist_ok=False)
+    destination = create_destination(destination)
+    print(f'{len(files)} files, {total / 1024**3:.2f} GiB\nDestination: {destination}', flush=True)
     for rel in dirs:
         (destination / rel).mkdir(parents=True, exist_ok=True)
     completed = 0
