@@ -9,13 +9,11 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+from urllib.parse import urlsplit
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-NAS_USER = "ego"
-NAS_PASSWORD = "MrVvG6WM"
-SHARE_NAME = "Ego"
-MOUNT_ROOT = Path.home() / ".local" / "share" / "nas-transfer" / "Ego"
+from nas_config import NAS_USER, NAS_PASSWORD, SHARE_NAME, MOUNT_ROOT
 
 
 def mounted_devices() -> list[Path]:
@@ -87,7 +85,8 @@ class TransferApp:
 
         ttk.Label(frame, text="NAS host").pack(anchor="w")
         row = ttk.Frame(frame); row.pack(fill="x", pady=(2, 8))
-        self.host_combo = ttk.Combobox(row, state="readonly")
+        self.host_combo = ttk.Combobox(row, values=["smb://sxd"])
+        self.host_combo.set("smb://sxd")
         self.host_combo.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="Find NAS", command=self.find_nas).pack(side="left", padx=(8, 0))
         ttk.Button(row, text="Mount", command=self.mount_nas).pack(side="left", padx=(8, 0))
@@ -103,6 +102,7 @@ class TransferApp:
         self.log = tk.Text(frame, height=9, state="disabled", wrap="word")
         self.log.pack(fill="both", expand=True, pady=(10, 0))
         self.refresh_drives()
+        self.root.after(300, self.mount_nas)
 
     def append(self, msg: str) -> None:
         self.log.configure(state="normal")
@@ -145,7 +145,12 @@ class TransferApp:
         threading.Thread(target=worker, daemon=True).start()
 
     def mount_nas(self) -> None:
-        host = self.host_combo.get().strip()
+        if self.busy: return
+        address = self.host_combo.get().strip()
+        parsed = urlsplit(address if "://" in address else "smb://" + address)
+        host = parsed.hostname
+        if parsed.scheme != "smb" or parsed.path.strip("/") not in ("", SHARE_NAME):
+            messagebox.showerror("Invalid NAS address", "Use smb://sxd or smb://sxd/Ego."); return
         if not host:
             messagebox.showerror("NAS host required", "Find the NAS or select its IP address first."); return
         if shutil.which("mount.cifs") is None:
@@ -157,13 +162,13 @@ class TransferApp:
                 MOUNT_ROOT.parent.mkdir(parents=True, exist_ok=True)
                 if not os.path.ismount(MOUNT_ROOT):
                     MOUNT_ROOT.mkdir(parents=True, exist_ok=True)
-                    # Feed the password over stdin via a private temporary credentials file.
+                    # Pass credentials through a private file, never command arguments.
                     cred = MOUNT_ROOT.parent / ".credentials"
                     fd = os.open(cred, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                     with os.fdopen(fd, "w") as f:
                         f.write(f"username={NAS_USER}\npassword={NAS_PASSWORD}\n")
                     try:
-                        result = run(["pkexec", "mount", "-t", "cifs", f"//{host}/{SHARE_NAME}", str(MOUNT_ROOT), "-o", f"credentials={cred},uid={os.getuid()},gid={os.getgid()},vers=3.0,iocharset=utf8"], timeout=45)
+                        result = run(["pkexec", "mount", "-t", "cifs", f"//{host}/{SHARE_NAME}", str(MOUNT_ROOT), "-o", f"credentials={cred},uid={os.getuid()},gid={os.getgid()},iocharset=utf8"], timeout=45)
                     finally:
                         cred.unlink(missing_ok=True)
                     if result.returncode != 0:
