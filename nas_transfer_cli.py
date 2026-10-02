@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 from nas_config import NAS_USER, NAS_PASSWORD, SHARE_NAME, MOUNT_ROOT
@@ -34,7 +35,7 @@ def removable_roots():
     return sorted(roots)
 
 
-def mount_nas(address):
+def mount_nas(address, authorization='sudo'):
     parsed = urlsplit(address if '://' in address else 'smb://' + address)
     if (parsed.scheme != 'smb' or not parsed.hostname or parsed.username
             or parsed.path.strip('/') not in ('', SHARE_NAME)):
@@ -56,8 +57,10 @@ def mount_nas(address):
         command = ['mount', '-t', 'cifs', remote, str(MOUNT_ROOT), '-o',
                    f'credentials={credentials.name},uid={os.getuid()},gid={os.getgid()},cache=none,iocharset=utf8']
         if os.geteuid() != 0:
-            command.insert(0, 'sudo')
-        subprocess.run(command, check=True)
+            command.insert(0, authorization)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            raise RuntimeError((result.stderr or result.stdout or 'Mount failed').strip())
     if not os.path.ismount(MOUNT_ROOT):
         raise RuntimeError('NAS mount did not appear.')
 
@@ -90,7 +93,9 @@ def connect_nas(address):
 
 def inventory(root):
     files, dirs = {}, []
-    for current, names, filenames in os.walk(root, followlinks=False):
+    def on_error(error):
+        raise error
+    for current, names, filenames in os.walk(root, followlinks=False, onerror=on_error):
         for name in names + filenames:
             p = Path(current) / name
             if p.is_symlink():
@@ -111,28 +116,61 @@ def digest(path, on_chunk=lambda n: None):
     return h.hexdigest()
 
 
-def transfer(source, destination, keep_source=False):
+class TransferCancelled(RuntimeError):
+    pass
+
+
+def transfer(source, destination, keep_source=False, notify=None, cancel=None, expected=None):
+    """Optional callbacks allow the desktop app to share the verified CLI transfer."""
+    phase = 'Preparing'
+    def emit(**event):
+        if notify:
+            notify(event)
+    def say(message):
+        if notify:
+            emit(message=message)
+        else:
+            print(message, flush=True)
+    def check_cancel():
+        if cancel and cancel.is_set():
+            raise TransferCancelled('Stopped by user. Any partial NAS copy is retained.')
+    check_cancel()
     files, dirs = inventory(source)
+    if expected is not None and files != expected:
+        raise RuntimeError('Card contents changed since scanning. Rescan the cards before transferring.')
     if not files:
         raise RuntimeError('No recording files found.')
     source_device = source.stat().st_dev
     nas_device = MOUNT_ROOT.stat().st_dev
     def check_mounts():
+        check_cancel()
         if (not os.path.ismount(MOUNT_ROOT) or MOUNT_ROOT.stat().st_dev != nas_device
                 or source.stat().st_dev != source_device):
             raise RuntimeError('A source or NAS mount changed. Cleanup stopped.')
     total = sum(s[2] for s in files.values())
     check_mounts()
     destination = create_destination(destination)
-    print(f'{len(files)} files, {total / 1024**3:.2f} GiB\nDestination: {destination}', flush=True)
+    emit(destination=str(destination))
+    say(f'{len(files)} files, {total / 1024**3:.2f} GiB\nDestination: {destination}')
     for rel in dirs:
         (destination / rel).mkdir(parents=True, exist_ok=True)
     completed = 0
+    last_report = 0.0
     def progress(n):
-        nonlocal completed
+        nonlocal completed, last_report
+        check_cancel()
         completed += n
-        print(f'\rProgress: {completed / max(total * 3, 1):.1%} ({completed / 1024**2:.1f} MiB processed)', end='', flush=True)
+        now = time.monotonic()
+        if now - last_report >= .1:
+            last_report = now
+            fraction = min(completed / max(total * 3, 1), .99)
+            if notify:
+                emit(phase=phase, progress=fraction)
+            else:
+                print(f'\rProgress: {fraction:.1%} ({completed / 1024**2:.1f} MiB processed)', end='', flush=True)
     hashes = {}
+    phase = 'Copying'
+    emit(phase=phase, progress=0.0)
     for rel, original in files.items():
         check_mounts()
         if signature(source / rel) != original:
@@ -148,7 +186,9 @@ def transfer(source, destination, keep_source=False):
         if signature(source / rel) != original:
             raise RuntimeError(f'Source changed during copy: {rel}')
         hashes[rel] = h.hexdigest()
-    print('\nVerifying NAS and rechecking source…', flush=True)
+    phase = 'Verifying'
+    emit(phase=phase)
+    say('\nVerifying NAS and rechecking source…')
     for rel, original in files.items():
         check_mounts()
         if (signature(destination / rel)[2] != original[2]
@@ -159,11 +199,14 @@ def transfer(source, destination, keep_source=False):
     current, current_dirs = inventory(source)
     if current != files or set(current_dirs) != set(dirs):
         raise RuntimeError('Source contents changed. Source cleanup skipped.')
-    print('\nAll files verified.', flush=True)
+    check_mounts()
+    say('\nAll files verified.')
     if keep_source:
-        print('Source retained (--keep-source).')
-        return
-    print('Clearing verified source files…', flush=True)
+        say('Source retained (--keep-source).')
+        emit(phase='Complete · source kept', progress=1.0)
+        return destination
+    emit(phase='Clearing verified files')
+    say('Clearing verified source files…')
     for rel, original in files.items():
         check_mounts()
         if signature(source / rel) != original:
@@ -174,7 +217,9 @@ def transfer(source, destination, keep_source=False):
             (source / rel).rmdir()
         except OSError:
             pass
-    print(f'Complete. Recording files cleared; recording folder retained.\n{destination}')
+    say(f'Complete. Recording files cleared; recording folder retained.\n{destination}')
+    emit(phase='Complete', progress=1.0)
+    return destination
 
 
 def main():

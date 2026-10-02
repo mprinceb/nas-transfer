@@ -18,20 +18,39 @@ and its command, but cannot install Tkinter, `mount.cifs`, or `pkexec`.
 On Debian/Ubuntu, install those system dependencies and venv support first:
 
 ```bash
-sudo apt install cifs-utils python3-tk pkexec python3-venv
+sudo apt install cifs-utils python3-tk pkexec python3-venv util-linux
 ```
 
 You can also run directly with `python3 nas_transfer.py`.
 
-If the UI cannot connect to the NAS, or Find NAS finds no servers, a dialog
-asks for a hostname, IP address, or SMB URL such as `smb://sxd/Ego`.
-It retries with the saved credentials. Cancel closes the prompt; the address
-field and Mount button remain available for another attempt. The initial NAS
-connection runs even when no removable drive is detected.
+## Desktop queue: up to 15 SD cards
 
-The app automatically attempts to mount `smb://sxd/Ego` on launch using the embedded NAS credentials. The NAS host field also accepts a hostname, IP address, or SMB URL. The optional Find NAS button scans the local IPv4 `/24` for TCP port 445. It stores the mount under `~/.local/share/nas-transfer/Ego`. The account password is embedded in the script for this internal tool; keep this folder private and do not publish or share it. The mount operation may show a system authorization dialog because creating a CIFS mount requires elevated system privileges.
+1. Mount the SD cards in your Linux file manager, then click **Rescan cards**.
+   The table lists removable/USB mounts containing `Trinet/recording`.
+2. Use the first column to select up to 15 ready cards. Empty or unreadable cards
+   cannot be selected. The first 15 ready cards are selected after a scan.
+3. Enter a shared **Data title**, or double-click a row to give that card its own
+   title. Each card gets its own folder; repeated titles become `title-2`, `title-3`, etc.
+4. Click **Transfer selected cards**. Cards run sequentially. Each row shows its
+   state and progress; the overall bar averages progress across the selected cards.
+   The activity log shows the actual destination for each card.
+5. Each card is copied, read back from the NAS, and checked against the source
+   before its verified files are cleared. Select **Keep source after verification**
+   if you want to retain recordings on the cards.
 
-The source is cleared only after SHA-256 verification. If the copy or verification fails, the source remains. The source recording folder itself is retained.
+Stop recording before scanning. Changed source contents stop the batch and require
+a new scan. A failed card stops the remaining queue. **Stop queue** requests a stop
+at the next I/O boundary; an outstanding network operation may take time to return.
+Partial NAS copies are retained. If cleanup has begun, some already verified files
+may have been cleared. Rescan before retrying. The `recording` folder is retained.
+The desktop app supports a 15-card queue; the CLI still selects one card per run.
+
+The app connects to `smb://sxd/Ego` on launch, even with no cards mounted. If the
+connection fails, a dialog asks for another hostname, IP address, or SMB URL.
+The saved credentials are reused. You can cancel and use **Connect** later.
+The mount is at `~/.local/share/nas-transfer/Ego`. The mount operation may show
+Linux's system authorization dialog. The NAS password itself is never requested.
+Shared credentials are embedded in `nas_config.py`; keep the package internal.
 
 ## Terminal version
 
