@@ -12,7 +12,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 from nas_config import MOUNT_ROOT, NAS_PASSWORD
 from nas_transfer_cli import (
-    TransferCancelled, inventory, mount_nas, removable_roots, transfer,
+    TransferCancelled, inventory, mount_nas, mounted_nas, removable_roots, transfer,
 )
 
 MAX_CARDS = 15
@@ -87,6 +87,10 @@ class TransferApp:
         self.scanning = False
         self.connecting = False
         self.connected = False
+        self.connection_id = 0
+        self.connection_cancel = threading.Event()
+        self.connection_timer = None
+        self.closing = False
         self.cards = {}
         self.jobs = []
         self.host = tk.StringVar(value='smb://sxd')
@@ -137,6 +141,8 @@ class TransferApp:
         self.host_entry.pack(side='left', padx=(0, 8))
         self.connect_button = ttk.Button(connection, text='Connect', command=self.connect)
         self.connect_button.pack(side='left')
+        self.cancel_connection_button = ttk.Button(connection, text='Cancel', command=self.cancel_connection, state='disabled')
+        self.cancel_connection_button.pack(side='left', padx=6)
         ttk.Label(connection, textvariable=self.connection, style='Panel.TLabel').pack(side='right', padx=8)
 
         settings = ttk.Frame(body, padding=(0, 15))
@@ -195,9 +201,13 @@ class TransferApp:
         self.log.configure(state='disabled')
 
     def lock_controls(self):
-        state = 'disabled' if self.busy or self.scanning or self.connecting else 'normal'
-        for widget in (self.start_button, self.scan_button, self.select_button, self.clear_button, self.connect_button, self.host_entry, self.title_entry, self.keep_check):
+        state = 'disabled' if self.busy or self.scanning else 'normal'
+        for widget in (self.scan_button, self.select_button, self.clear_button, self.title_entry, self.keep_check):
             widget.configure(state=state)
+        for widget in (self.connect_button, self.host_entry):
+            widget.configure(state='disabled' if self.busy or self.connecting else 'normal')
+        self.start_button.configure(state='disabled' if self.busy or self.scanning or self.connecting or not self.connected else 'normal')
+        self.cancel_connection_button.configure(state='normal' if self.connecting else 'disabled')
         self.stop_button.configure(state='normal' if self.busy else 'disabled')
 
     def render_card(self, key):
@@ -281,20 +291,49 @@ class TransferApp:
         self.connecting = True
         self.connected = False
         self.connection.set('Connecting…')
+        self.connection_id += 1
+        attempt = self.connection_id
+        cancel = self.connection_cancel = threading.Event()
+        self.connection_timer = self.root.after(40000, lambda: self.connection_timed_out(attempt))
         self.lock_controls()
         def worker():
             try:
-                mount_nas(address, authorization='pkexec')
-                self.events.put(('connected', address))
+                mount_nas(address, authorization='pkexec', cancel=cancel)
+                self.events.put(('connected', (attempt, address)))
             except Exception as error:
-                self.events.put(('connection_error', str(error)))
+                self.events.put(('connection_error', (attempt, str(error))))
         threading.Thread(target=worker, daemon=True).start()
+
+    def cancel_connection(self):
+        self.connection_cancel.set()
+        self.connection_id += 1  # Discard late results from a cancelled attempt.
+        if self.connection_timer is not None:
+            self.root.after_cancel(self.connection_timer)
+            self.connection_timer = None
+        self.connecting = False
+        self.connected = False
+        self.connection.set('Not connected')
+        self.lock_controls()
+
+    def connection_timed_out(self, attempt):
+        if self.connecting and self.connection_id == attempt:
+            self.cancel_connection()
+            self.append('NAS connection timed out. Enter its IP address and click Connect.')
+            self.prompt_nas_address()
+
+    def prompt_nas_address(self):
+        if self.closing:
+            return
+        address = simpledialog.askstring('Connect to NAS', 'NAS connection failed.\nEnter an address such as smb://sxd/Ego or 192.168.1.50.\nSaved credentials will be used.', initialvalue=self.host.get(), parent=self.root)
+        if address and address.strip():
+            self.host.set(address.strip())
+            self.connect()
 
     def start_transfer(self):
         if self.busy or self.scanning or self.connecting:
             return
         jobs = [(key, dict(card)) for key, card in self.cards.items() if card['selected'] and card['phase'] == 'Ready']
-        if not self.connected or not os.path.ismount(MOUNT_ROOT):
+        if not self.connected or not mounted_nas():
             messagebox.showerror('Connect the NAS', 'Connect to the NAS before starting the queue.', parent=self.root)
             return
         if not 1 <= len(jobs) <= MAX_CARDS:
@@ -333,9 +372,9 @@ class TransferApp:
         if self.busy:
             self.stop()
             self.append('Stopping the queue. Close the window once it has stopped. Verified files already cleared remain on the NAS.')
-        elif self.connecting:
-            self.append('Please wait for the NAS connection attempt to finish.')
         else:
+            self.closing = True
+            self.cancel_connection()
             self.root.destroy()
 
     def pump(self):
@@ -366,6 +405,12 @@ class TransferApp:
                 self.append(value)
                 self.lock_controls()
             elif kind in ('connected', 'connection_error'):
+                attempt, value = value
+                if attempt != self.connection_id or self.closing:
+                    continue
+                if self.connection_timer is not None:
+                    self.root.after_cancel(self.connection_timer)
+                    self.connection_timer = None
                 self.connecting = False
                 self.connected = kind == 'connected'
                 self.connection.set('Connected · Ego' if self.connected else 'Not connected')
@@ -374,10 +419,7 @@ class TransferApp:
                     self.append(f'NAS connected: {value} → {MOUNT_ROOT}')
                 else:
                     self.append(value)
-                    address = simpledialog.askstring('Connect to NAS', 'NAS connection failed.\nEnter an address such as smb://sxd/Ego or 192.168.1.50.\nSaved credentials will be used.', initialvalue=self.host.get(), parent=self.root)
-                    if address and address.strip():
-                        self.host.set(address.strip())
-                        self.connect()
+                    self.prompt_nas_address()
             elif kind == 'card':
                 key, event = value
                 self.cards[key].update({k: v for k, v in event.items() if k != 'message'})
@@ -397,7 +439,8 @@ class TransferApp:
                 if phase != 'Complete':
                     self.append('Remaining cards were not started. Partial NAS copies are retained. Some verified files may already have been cleared. Rescan before retrying.')
                 self.lock_controls()
-        self.root.after(50, self.pump)
+        if not self.closing:
+            self.root.after(50, self.pump)
 
 
 def main():

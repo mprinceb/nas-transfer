@@ -5,10 +5,12 @@ import datetime
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
@@ -35,33 +37,89 @@ def removable_roots():
     return sorted(roots)
 
 
-def mount_nas(address, authorization='sudo'):
+def mounted_nas():
+    """Read kernel mount metadata without touching a possibly stalled CIFS path."""
+    def unescape(value):
+        return re.sub(r'\\([0-7]{3})', lambda match: chr(int(match[1], 8)), value)
+    result = None
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        left, right = line.split(' - ', 1)
+        fields = left.split()
+        if unescape(fields[4]) == str(MOUNT_ROOT):
+            filesystem, source, *_ = right.split()
+            result = (unescape(source), filesystem)
+    return result
+
+
+def connection_command(command, cancel=None, timeout=35):
+    """Bound waits, including pipe reads, and permit a desktop cancellation."""
+    if cancel and cancel.is_set():
+        raise RuntimeError('NAS connection cancelled.')
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            if cancel and cancel.is_set():
+                raise RuntimeError('NAS connection cancelled.')
+            if time.monotonic() >= deadline:
+                raise RuntimeError('NAS connection timed out. Check the NAS address and network, then retry.')
+            try:
+                output, error = process.communicate(timeout=.2)
+                if process.returncode:
+                    raise RuntimeError((error or output or 'Connection command failed').strip())
+                return output
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
+        if process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=.5)
+            except (PermissionError, ProcessLookupError, subprocess.TimeoutExpired):
+                # A privileged mount is bounded by its own root-owned timeout.
+                pass
+        if process.stdout:
+            process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
+
+
+def mount_nas(address, authorization='sudo', cancel=None):
     parsed = urlsplit(address if '://' in address else 'smb://' + address)
     if (parsed.scheme != 'smb' or not parsed.hostname or parsed.username
             or parsed.path.strip('/') not in ('', SHARE_NAME)):
         raise ValueError('Use smb://sxd, smb://sxd/Ego, or a NAS IP address.')
     remote = f'//{parsed.hostname}/{SHARE_NAME}'
-    if os.path.ismount(MOUNT_ROOT):
-        result = subprocess.run(['findmnt', '-rn', '-M', str(MOUNT_ROOT), '-o', 'SOURCE,FSTYPE'],
-                                check=True, capture_output=True, text=True)
-        parts = result.stdout.split()
-        if len(parts) != 2 or parts[0].casefold() != remote.casefold() or parts[1] != 'cifs':
-            raise RuntimeError(f'{MOUNT_ROOT} is mounted from a different source: {result.stdout.strip()}')
+    existing = mounted_nas()
+    if existing:
+        if existing[0].casefold() != remote.casefold() or existing[1] != 'cifs':
+            raise RuntimeError(f'The Ego folder is already mounted from {existing[0]}. Enter that NAS address to reuse it.')
+    try:
+        connection_command([
+            sys.executable, '-c',
+            'import socket,sys; socket.create_connection((sys.argv[1],445),timeout=4).close()',
+            parsed.hostname,
+        ], cancel=cancel, timeout=8)
+    except RuntimeError as error:
+        if cancel and cancel.is_set():
+            raise
+        raise RuntimeError(f'Cannot reach NAS {parsed.hostname} on SMB port 445. Check the network or enter its IP address.') from error
+    if existing:
         return
     if not shutil.which('mount.cifs'):
         raise RuntimeError('Install cifs-utils first: sudo apt install cifs-utils')
+    if cancel and cancel.is_set():
+        raise RuntimeError('NAS connection cancelled.')
     MOUNT_ROOT.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode='w', prefix='nas-credentials-') as credentials:
         credentials.write(f'username={NAS_USER}\npassword={NAS_PASSWORD}\n')
         credentials.flush()
-        command = ['mount', '-t', 'cifs', remote, str(MOUNT_ROOT), '-o',
+        command = ['timeout', '--kill-after=2s', '25s', 'mount', '-t', 'cifs', remote, str(MOUNT_ROOT), '-o',
                    f'credentials={credentials.name},uid={os.getuid()},gid={os.getgid()},cache=none,iocharset=utf8']
         if os.geteuid() != 0:
             command.insert(0, authorization)
-        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        if result.returncode:
-            raise RuntimeError((result.stderr or result.stdout or 'Mount failed').strip())
-    if not os.path.ismount(MOUNT_ROOT):
+        connection_command(command, cancel=cancel)
+    if not mounted_nas():
         raise RuntimeError('NAS mount did not appear.')
 
 

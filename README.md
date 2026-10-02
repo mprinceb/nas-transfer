@@ -2,7 +2,57 @@
 
 A small Tkinter utility for Linux that copies files under a mounted removable drive's `Trinet/recording/` folder to `Ego/DDMMYYYY/<title>/` on an SMB share named `Ego`. It shows byte progress, verifies each destination file with SHA-256, then removes only the files in the source snapshot. When a title already exists, both apps automatically create title-2, title-3, and so on, preserving existing folders.
 
-## Install and run
+## Ubuntu / Debian desktop installation
+
+Use `dist/trinet-nas-transfer_0.2.1_linux.tar.gz` on a desktop with apt and
+Python 3.10 or newer available from its distribution repositories.
+
+```bash
+tar -xzf trinet-nas-transfer_0.2.1_linux.tar.gz
+bash install.sh
+```
+
+The installer checks required system packages, refreshes apt metadata when
+dependencies are missing, and installs the app and dependencies automatically.
+It may ask for your local administrator password. Open **Ego Trinet Transfer**
+from the application menu afterward. Both commands are installed system-wide:
+
+```bash
+trinet-nas-transfer
+trinet-nas-transfer-cli
+```
+
+Run `bash install.sh --check` for a dependency report without installation.
+To install the `.deb` directly and let apt resolve dependencies:
+
+```bash
+sudo apt install ./trinet-nas-transfer_0.2.1_all.deb
+```
+
+The package includes Python/Tkinter, CIFS, PolicyKit, util-linux, mount, and sudo
+dependency declarations. Internet access to the configured apt repositories is
+needed for missing packages. It installs an app-menu entry and icon. It does not
+start a transfer during installation. Updates use the same installer command.
+
+Remove the application with `sudo apt remove trinet-nas-transfer`. Recordings on
+the NAS and SD cards are not part of the installed package and are not removed.
+The app connects to the NAS when launched; this package does not configure a
+boot-time NAS mount or start the app automatically at login.
+
+This installer supports Ubuntu/Debian systems with apt. Other Linux distributions
+can run the Python source after installing equivalent system packages.
+
+### Build the internal installer
+
+```bash
+bash build-deb.sh
+```
+
+Requires `dpkg-deb` and standard Linux shell utilities; no root access or pip
+downloads are needed to build. Outputs a `.deb` and portable installer bundle
+under `dist/`. The bundle includes the configured internal NAS credentials.
+
+## Run from source / install with pip
 
 Python 3.10 or newer is required. Install the app in a virtual environment:
 
@@ -48,6 +98,11 @@ The desktop app supports a 15-card queue; the CLI still selects one card per run
 The app connects to `smb://sxd/Ego` on launch, even with no cards mounted. If the
 connection fails, a dialog asks for another hostname, IP address, or SMB URL.
 The saved credentials are reused. You can cancel and use **Connect** later.
+Connection attempts have a 40-second UI deadline and a **Cancel** button.
+The window can close immediately while connecting. Mount detection reads Linux's
+mount table without accessing an unresponsive NAS folder. Existing mounts from
+another address are reported so you can enter that address. SMB reachability is
+checked before attempting authorization and mounting.
 The mount is at `~/.local/share/nas-transfer/Ego`. The mount operation may show
 Linux's system authorization dialog. The NAS password itself is never requested.
 Shared credentials are embedded in `nas_config.py`; keep the package internal.

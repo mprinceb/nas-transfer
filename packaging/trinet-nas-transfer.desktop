@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Ego Trinet Transfer
+Comment=Copy and verify recordings from up to 15 SD cards to your NAS
+Exec=/usr/bin/trinet-nas-transfer
+TryExec=/usr/bin/trinet-nas-transfer
+Icon=trinet-nas-transfer
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=Trinet;Ego;NAS;SD;Transfer;
+StartupNotify=false
