@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-version=0.2.1
+version=0.2.2
 command -v dpkg-deb >/dev/null || { echo 'Building requires dpkg-deb (package: dpkg).' >&2; exit 1; }
 staging=$(mktemp -d)
 trap 'rm -rf -- "$staging"' EXIT
@@ -34,7 +34,7 @@ Section: utils
 Priority: optional
 Architecture: all
 Maintainer: Trinet Internal Tools <trinet-tools@localhost>
-Depends: python3 (>= 3.10), python3-tk, cifs-utils, pkexec, util-linux, mount, sudo, coreutils
+Depends: python3 (>= 3.10), python3-tk, cifs-utils, pkexec, util-linux, mount, sudo, coreutils, samba-common-bin, libnss-mdns
 Installed-Size: $installed_size
 Description: Ego NAS recording transfer desktop and CLI utility
  Transfer up to 15 mounted SD cards in a verified desktop queue.

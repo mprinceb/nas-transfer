@@ -3,7 +3,7 @@
 set -euo pipefail
 export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 installer_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-package_name=trinet-nas-transfer_0.2.1_all.deb
+package_name=trinet-nas-transfer_0.2.2_all.deb
 case "${1:-}" in
   '') check_only=false ;;
   --check) check_only=true ;;
@@ -26,7 +26,7 @@ if [[ ! -f "$package_file" ]]; then
   echo "Missing $package_name. Extract the complete installer bundle, or run bash build-deb.sh from the source folder." >&2
   exit 1
 fi
-dependencies=(python3 python3-tk cifs-utils pkexec util-linux mount sudo coreutils)
+dependencies=(python3 python3-tk cifs-utils pkexec util-linux mount sudo coreutils samba-common-bin libnss-mdns)
 missing=()
 echo 'Checking required system packages:'
 for dependency in "${dependencies[@]}"; do
@@ -72,7 +72,7 @@ echo 'Installing Ego Trinet Transfer and required dependencies…'
 "${elevate[@]}" apt-get install -y --no-remove "$package_temp/$package_name"
 echo 'Checking installed runtime…'
 /usr/bin/python3 -c 'import sys, tkinter; assert sys.version_info >= (3, 10)'
-for tool in mount.cifs mount pkexec lsblk findmnt sudo timeout; do
+for tool in mount.cifs mount pkexec lsblk findmnt sudo timeout nmblookup; do
   command -v "$tool" >/dev/null || { echo "Required command still missing: $tool" >&2; exit 1; }
 done
 if [[ ! -x /usr/bin/trinet-nas-transfer ]]; then

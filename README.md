@@ -4,11 +4,11 @@ A small Tkinter utility for Linux that copies files under a mounted removable dr
 
 ## Ubuntu / Debian desktop installation
 
-Use `dist/trinet-nas-transfer_0.2.1_linux.tar.gz` on a desktop with apt and
+Use `dist/trinet-nas-transfer_0.2.2_linux.tar.gz` on a desktop with apt and
 Python 3.10 or newer available from its distribution repositories.
 
 ```bash
-tar -xzf trinet-nas-transfer_0.2.1_linux.tar.gz
+tar -xzf trinet-nas-transfer_0.2.2_linux.tar.gz
 bash install.sh
 ```
 
@@ -26,7 +26,7 @@ Run `bash install.sh --check` for a dependency report without installation.
 To install the `.deb` directly and let apt resolve dependencies:
 
 ```bash
-sudo apt install ./trinet-nas-transfer_0.2.1_all.deb
+sudo apt install ./trinet-nas-transfer_0.2.2_all.deb
 ```
 
 The package includes Python/Tkinter, CIFS, PolicyKit, util-linux, mount, and sudo
@@ -68,7 +68,7 @@ and its command, but cannot install Tkinter, `mount.cifs`, or `pkexec`.
 On Debian/Ubuntu, install those system dependencies and venv support first:
 
 ```bash
-sudo apt install cifs-utils python3-tk pkexec python3-venv util-linux
+sudo apt install cifs-utils python3-tk pkexec python3-venv util-linux samba-common-bin libnss-mdns
 ```
 
 You can also run directly with `python3 nas_transfer.py`.
@@ -100,9 +100,12 @@ connection fails, a dialog asks for another hostname, IP address, or SMB URL.
 The saved credentials are reused. You can cancel and use **Connect** later.
 Connection attempts have a 40-second UI deadline and a **Cancel** button.
 The window can close immediately while connecting. Mount detection reads Linux's
-mount table without accessing an unresponsive NAS folder. Existing mounts from
-another address are reported so you can enter that address. SMB reachability is
-checked before attempting authorization and mounting.
+mount table without accessing an unresponsive NAS folder. The app resolves hostnames using system DNS, `.local` mDNS, and NetBIOS.
+When the NAS IP changes, it checks the new address, normally unmounts the old
+Ego share, and mounts the new address with the saved credentials. A busy share
+stops reconnection; close files or transfers using it and retry. No forced or
+lazy unmount is used. Hostname/IP aliases of the same active server reuse the
+existing mount. SMB reachability is checked before switching mounts.
 The mount is at `~/.local/share/nas-transfer/Ego`. The mount operation may show
 Linux's system authorization dialog. The NAS password itself is never requested.
 Shared credentials are embedded in `nas_config.py`; keep the package internal.

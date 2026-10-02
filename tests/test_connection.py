@@ -31,10 +31,55 @@ class ConnectionTests(unittest.TestCase):
         finally:
             timer.join()
 
-    def test_existing_mismatched_mount_is_reported_without_stat(self):
-        with patch.object(core, 'mounted_nas', return_value=('//10.0.0.1/Ego', 'cifs')), patch.object(os.path, 'ismount', side_effect=AssertionError('Network stat forbidden')):
-            with self.assertRaisesRegex(RuntimeError, 'already mounted from //10.0.0.1/Ego'):
+    def test_changed_ip_unmounts_then_mounts(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(core, 'MOUNT_ROOT', Path(tmp)/'Ego'), \
+             patch.object(core, 'mounted_nas', side_effect=[('//192.168.0.222/Ego','cifs'), None, ('//sxd/Ego','cifs')]), \
+             patch.object(core, 'mounted_nas_ip', return_value='192.168.0.222'), \
+             patch.object(core, 'reachable_nas_ip', return_value='192.168.0.182'), \
+             patch.object(core.shutil, 'which', return_value='/usr/sbin/mount.cifs'), \
+             patch.object(core, 'connection_command', return_value='') as command:
+            core.mount_nas('smb://sxd')
+            calls=[c.args[0] for c in command.call_args_list]
+            self.assertIn('umount', calls[0])
+            self.assertNotIn('-l', calls[0])
+            self.assertNotIn('-f', calls[0])
+            self.assertIn('mount', calls[1])
+            self.assertIn('ip=192.168.0.182', calls[1][-1])
+
+    def test_alias_of_current_ip_reuses_mount(self):
+        with patch.object(core, 'mounted_nas', return_value=('//192.168.0.182/Ego','cifs')), \
+             patch.object(core, 'mounted_nas_ip', return_value='192.168.0.182'), \
+             patch.object(core, 'reachable_nas_ip', return_value='192.168.0.182'), \
+             patch.object(core, 'connection_command') as command:
+            core.mount_nas('smb://sxd')
+            command.assert_not_called()
+
+    def test_busy_old_mount_never_mounts_over_it(self):
+        with patch.object(core, 'mounted_nas', return_value=('//192.168.0.222/Ego','cifs')), \
+             patch.object(core, 'mounted_nas_ip', return_value='192.168.0.222'), \
+             patch.object(core, 'reachable_nas_ip', return_value='192.168.0.182'), \
+             patch.object(core.shutil, 'which', return_value='/usr/sbin/mount.cifs'), \
+             patch.object(core, 'connection_command', side_effect=RuntimeError('target is busy')) as command:
+            with self.assertRaisesRegex(RuntimeError, 'Close files or transfers'):
                 core.mount_nas('smb://sxd')
+            self.assertEqual(command.call_count, 1)
+            self.assertIn('umount', command.call_args.args[0])
+
+    def test_netbios_fallback(self):
+        with patch.object(core.shutil, 'which', return_value='/usr/bin/nmblookup'), \
+             patch.object(core, 'connection_command', side_effect=[RuntimeError('dns'), RuntimeError('mdns'), '192.168.0.182 sxd<00>\n', '192.168.0.182\n']) as command:
+            self.assertEqual(core.reachable_nas_ip('sxd'), '192.168.0.182')
+            self.assertEqual(command.call_args_list[2].args[0], ['nmblookup', '--', 'sxd'])
+
+    def test_unreachable_new_nas_preserves_existing_mount(self):
+        with patch.object(core, 'mounted_nas', return_value=('//192.168.0.222/Ego','cifs')), \
+             patch.object(core, 'reachable_nas_ip', side_effect=RuntimeError('unreachable')), \
+             patch.object(core, 'connection_command') as command:
+            with self.assertRaisesRegex(RuntimeError, 'unreachable'):
+                core.mount_nas('smb://sxd')
+            command.assert_not_called()
 
 
 @unittest.skipUnless(os.environ.get('DISPLAY'), 'Needs Xvfb or a desktop')

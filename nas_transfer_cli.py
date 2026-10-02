@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -84,6 +85,53 @@ def connection_command(command, cancel=None, timeout=35):
             process.stderr.close()
 
 
+def mounted_nas_ip():
+    """The address used by an existing CIFS session, even after DNS changes."""
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        left, right = line.split(' - ', 1)
+        mountpoint = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), left.split()[4])
+        if mountpoint == str(MOUNT_ROOT):
+            for option in right.split()[2].split(','):
+                if option.startswith('addr='):
+                    return option[5:]
+    return None
+
+
+def reachable_nas_ip(host, cancel=None):
+    """Try system DNS/mDNS, then Samba's LAN NetBIOS name service."""
+    probe = ('import socket,sys; '
+             's=socket.create_connection((sys.argv[1],445),timeout=3); '
+             'print(s.getpeername()[0]); s.close()')
+    names = [host]
+    if '.' not in host and ':' not in host:
+        names.append(host + '.local')
+    def try_address(name):
+        output = connection_command([sys.executable, '-c', probe, name], cancel=cancel, timeout=4)
+        return str(ipaddress.ip_address(output.strip()))
+    for name in names:
+        try:
+            return try_address(name)
+        except (RuntimeError, ValueError):
+            if cancel and cancel.is_set():
+                raise RuntimeError('NAS connection cancelled.')
+    if len(names) > 1 and shutil.which('nmblookup'):
+        try:
+            output = connection_command(['nmblookup', '--', host], cancel=cancel, timeout=4)
+            for line in output.splitlines():
+                fields = line.split()
+                if not fields:
+                    continue
+                try:
+                    address = str(ipaddress.ip_address(fields[0]))
+                except ValueError:
+                    continue
+                return try_address(address)
+        except (RuntimeError, ValueError):
+            if cancel and cancel.is_set():
+                raise RuntimeError('NAS connection cancelled.')
+    raise RuntimeError(f'Cannot reach NAS {host} on SMB port 445. Check the network or enter its IP address.')
+
+
 def mount_nas(address, authorization='sudo', cancel=None):
     parsed = urlsplit(address if '://' in address else 'smb://' + address)
     if (parsed.scheme != 'smb' or not parsed.hostname or parsed.username
@@ -91,36 +139,42 @@ def mount_nas(address, authorization='sudo', cancel=None):
         raise ValueError('Use smb://sxd, smb://sxd/Ego, or a NAS IP address.')
     remote = f'//{parsed.hostname}/{SHARE_NAME}'
     existing = mounted_nas()
+    if existing and (existing[1] != 'cifs' or existing[0].rsplit('/', 1)[-1].casefold() != SHARE_NAME.casefold()):
+        raise RuntimeError('The application mount folder is used by a different filesystem or share. Unmount it manually first.')
+    # Confirm the new server is reachable before changing the existing mount.
+    resolved_ip = reachable_nas_ip(parsed.hostname, cancel)
     if existing:
-        if existing[0].casefold() != remote.casefold() or existing[1] != 'cifs':
-            raise RuntimeError(f'The Ego folder is already mounted from {existing[0]}. Enter that NAS address to reuse it.')
-    try:
-        connection_command([
-            sys.executable, '-c',
-            'import socket,sys; socket.create_connection((sys.argv[1],445),timeout=4).close()',
-            parsed.hostname,
-        ], cancel=cancel, timeout=8)
-    except RuntimeError as error:
-        if cancel and cancel.is_set():
-            raise
-        raise RuntimeError(f'Cannot reach NAS {parsed.hostname} on SMB port 445. Check the network or enter its IP address.') from error
-    if existing:
-        return
+        old_ip = mounted_nas_ip()
+        if old_ip is None:
+            try:
+                old_ip = str(ipaddress.ip_address(urlsplit('smb:' + existing[0]).hostname))
+            except ValueError:
+                pass
+        if old_ip == resolved_ip:
+            return
     if not shutil.which('mount.cifs'):
         raise RuntimeError('Install cifs-utils first: sudo apt install cifs-utils')
+    def privileged(command):
+        if os.geteuid() != 0:
+            command.insert(0, authorization)
+        return connection_command(command, cancel=cancel)
+    if existing:
+        try:
+            privileged(['timeout', '--kill-after=2s', '12s', 'umount', '--', str(MOUNT_ROOT)])
+        except RuntimeError as error:
+            raise RuntimeError(f'Could not disconnect the old NAS {existing[0]}. Close files or transfers using it, then retry. {error}') from error
+        if mounted_nas():
+            raise RuntimeError('The old NAS is still mounted. Reconnect stopped.')
     if cancel and cancel.is_set():
         raise RuntimeError('NAS connection cancelled.')
     MOUNT_ROOT.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode='w', prefix='nas-credentials-') as credentials:
         credentials.write(f'username={NAS_USER}\npassword={NAS_PASSWORD}\n')
         credentials.flush()
-        command = ['timeout', '--kill-after=2s', '25s', 'mount', '-t', 'cifs', remote, str(MOUNT_ROOT), '-o',
-                   f'credentials={credentials.name},uid={os.getuid()},gid={os.getgid()},cache=none,iocharset=utf8']
-        if os.geteuid() != 0:
-            command.insert(0, authorization)
-        connection_command(command, cancel=cancel)
-    if not mounted_nas():
-        raise RuntimeError('NAS mount did not appear.')
+        privileged(['timeout', '--kill-after=2s', '25s', 'mount', '-t', 'cifs', remote, str(MOUNT_ROOT), '-o',
+                    f'credentials={credentials.name},uid={os.getuid()},gid={os.getgid()},ip={resolved_ip},cache=none,iocharset=utf8'])
+    if mounted_nas() != (remote, 'cifs'):
+        raise RuntimeError('Expected NAS mount did not appear.')
 
 
 def signature(path):

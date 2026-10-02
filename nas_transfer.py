@@ -321,10 +321,11 @@ class TransferApp:
             self.append('NAS connection timed out. Enter its IP address and click Connect.')
             self.prompt_nas_address()
 
-    def prompt_nas_address(self):
+    def prompt_nas_address(self, reason='NAS connection failed.'):
         if self.closing:
             return
-        address = simpledialog.askstring('Connect to NAS', 'NAS connection failed.\nEnter an address such as smb://sxd/Ego or 192.168.1.50.\nSaved credentials will be used.', initialvalue=self.host.get(), parent=self.root)
+        reason = reason.replace(NAS_PASSWORD, '[redacted]')
+        address = simpledialog.askstring('Connect to NAS', f'{reason}\n\nEnter an address such as smb://sxd/Ego or 192.168.1.50.\nSaved credentials will be used.', initialvalue=self.host.get(), parent=self.root)
         if address and address.strip():
             self.host.set(address.strip())
             self.connect()
@@ -419,7 +420,7 @@ class TransferApp:
                     self.append(f'NAS connected: {value} → {MOUNT_ROOT}')
                 else:
                     self.append(value)
-                    self.prompt_nas_address()
+                    self.prompt_nas_address(value)
             elif kind == 'card':
                 key, event = value
                 self.cards[key].update({k: v for k, v in event.items() if k != 'message'})
