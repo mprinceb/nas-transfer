@@ -38,7 +38,7 @@ def removable_roots():
     return sorted(roots)
 
 
-def mounted_nas():
+def mounted_nas(root=None):
     """Read kernel mount metadata without touching a possibly stalled CIFS path."""
     def unescape(value):
         return re.sub(r'\\([0-7]{3})', lambda match: chr(int(match[1], 8)), value)
@@ -46,7 +46,7 @@ def mounted_nas():
     for line in Path('/proc/self/mountinfo').read_text().splitlines():
         left, right = line.split(' - ', 1)
         fields = left.split()
-        if unescape(fields[4]) == str(MOUNT_ROOT):
+        if unescape(fields[4]) == str(root if root is not None else MOUNT_ROOT):
             filesystem, source, *_ = right.split()
             result = (unescape(source), filesystem)
     return result
@@ -67,7 +67,7 @@ def connection_command(command, cancel=None, timeout=35):
             try:
                 output, error = process.communicate(timeout=.2)
                 if process.returncode:
-                    raise RuntimeError((error or output or 'Connection command failed').strip())
+                    raise RuntimeError((error or output or ('NAS mount operation timed out.' if process.returncode in (124, 137) else f'Connection command exited with status {process.returncode}. Check the system authorization dialog.')).strip())
                 return output
             except subprocess.TimeoutExpired:
                 continue
@@ -85,12 +85,12 @@ def connection_command(command, cancel=None, timeout=35):
             process.stderr.close()
 
 
-def mounted_nas_ip():
+def mounted_nas_ip(root=None):
     """The address used by an existing CIFS session, even after DNS changes."""
     for line in Path('/proc/self/mountinfo').read_text().splitlines():
         left, right = line.split(' - ', 1)
         mountpoint = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), left.split()[4])
-        if mountpoint == str(MOUNT_ROOT):
+        if mountpoint == str(root if root is not None else MOUNT_ROOT):
             for option in right.split()[2].split(','):
                 if option.startswith('addr='):
                     return option[5:]
@@ -138,43 +138,38 @@ def mount_nas(address, authorization='sudo', cancel=None):
             or parsed.path.strip('/') not in ('', SHARE_NAME)):
         raise ValueError('Use smb://sxd, smb://sxd/Ego, or a NAS IP address.')
     remote = f'//{parsed.hostname}/{SHARE_NAME}'
-    existing = mounted_nas()
-    if existing and (existing[1] != 'cifs' or existing[0].rsplit('/', 1)[-1].casefold() != SHARE_NAME.casefold()):
-        raise RuntimeError('The application mount folder is used by a different filesystem or share. Unmount it manually first.')
-    # Confirm the new server is reachable before changing the existing mount.
     resolved_ip = reachable_nas_ip(parsed.hostname, cancel)
+    mount_root = MOUNT_ROOT
+    existing = mounted_nas(mount_root)
     if existing:
-        old_ip = mounted_nas_ip()
-        if old_ip is None:
-            try:
-                old_ip = str(ipaddress.ip_address(urlsplit('smb:' + existing[0]).hostname))
-            except ValueError:
-                pass
-        if old_ip == resolved_ip:
-            return
+        if existing[1] == 'cifs' and existing[0].rsplit('/', 1)[-1].casefold() == SHARE_NAME.casefold() and mounted_nas_ip(mount_root) == resolved_ip:
+            return mount_root
+        # A separate local mount avoids stat/unmount operations on the old server.
+        from nas_config import MOUNT_ROOT as default_root
+        mount_root = default_root.parent / 'connections' / resolved_ip.replace(':', '_') / SHARE_NAME
+        occupied = mounted_nas(mount_root)
+        if occupied:
+            if occupied[1] == 'cifs' and occupied[0].rsplit('/', 1)[-1].casefold() == SHARE_NAME.casefold() and mounted_nas_ip(mount_root) == resolved_ip:
+                return mount_root
+            raise RuntimeError(f'The connection folder {mount_root} is occupied by another mount.')
     if not shutil.which('mount.cifs'):
         raise RuntimeError('Install cifs-utils first: sudo apt install cifs-utils')
     def privileged(command):
         if os.geteuid() != 0:
             command.insert(0, authorization)
         return connection_command(command, cancel=cancel)
-    if existing:
-        try:
-            privileged(['timeout', '--kill-after=2s', '12s', 'umount', '--', str(MOUNT_ROOT)])
-        except RuntimeError as error:
-            raise RuntimeError(f'Could not disconnect the old NAS {existing[0]}. Close files or transfers using it, then retry. {error}') from error
-        if mounted_nas():
-            raise RuntimeError('The old NAS is still mounted. Reconnect stopped.')
     if cancel and cancel.is_set():
         raise RuntimeError('NAS connection cancelled.')
-    MOUNT_ROOT.mkdir(parents=True, exist_ok=True)
+    mount_root.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode='w', prefix='nas-credentials-') as credentials:
         credentials.write(f'username={NAS_USER}\npassword={NAS_PASSWORD}\n')
         credentials.flush()
-        privileged(['timeout', '--kill-after=2s', '25s', 'mount', '-t', 'cifs', remote, str(MOUNT_ROOT), '-o',
+        privileged(['timeout', '--kill-after=2s', '25s', 'mount', '-t', 'cifs', remote, str(mount_root), '-o',
                     f'credentials={credentials.name},uid={os.getuid()},gid={os.getgid()},ip={resolved_ip},cache=none,iocharset=utf8'])
-    if mounted_nas() != (remote, 'cifs'):
+    if mounted_nas(mount_root) != (remote, 'cifs'):
         raise RuntimeError('Expected NAS mount did not appear.')
+
+    return mount_root
 
 
 def signature(path):
@@ -186,10 +181,11 @@ def signature(path):
 
 def connect_nas(address):
     """Retry failed mounts with an operator-supplied SMB address."""
+    global MOUNT_ROOT
     while True:
         print(f'Connecting to {address} (share {SHARE_NAME}) as {NAS_USER}…', flush=True)
         try:
-            mount_nas(address)
+            MOUNT_ROOT = mount_nas(address)
             return
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
             print(f'Could not connect to the NAS: {str(error).replace(NAS_PASSWORD, "[redacted]")}', flush=True)

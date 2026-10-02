@@ -4,11 +4,11 @@ A small Tkinter utility for Linux that copies files under a mounted removable dr
 
 ## Ubuntu / Debian desktop installation
 
-Use `dist/trinet-nas-transfer_0.2.2_linux.tar.gz` on a desktop with apt and
+Use `dist/trinet-nas-transfer_0.2.3_linux.tar.gz` on a desktop with apt and
 Python 3.10 or newer available from its distribution repositories.
 
 ```bash
-tar -xzf trinet-nas-transfer_0.2.2_linux.tar.gz
+tar -xzf trinet-nas-transfer_0.2.3_linux.tar.gz
 bash install.sh
 ```
 
@@ -26,7 +26,7 @@ Run `bash install.sh --check` for a dependency report without installation.
 To install the `.deb` directly and let apt resolve dependencies:
 
 ```bash
-sudo apt install ./trinet-nas-transfer_0.2.2_all.deb
+sudo apt install ./trinet-nas-transfer_0.2.3_all.deb
 ```
 
 The package includes Python/Tkinter, CIFS, PolicyKit, util-linux, mount, and sudo
@@ -101,11 +101,11 @@ The saved credentials are reused. You can cancel and use **Connect** later.
 Connection attempts have a 40-second UI deadline and a **Cancel** button.
 The window can close immediately while connecting. Mount detection reads Linux's
 mount table without accessing an unresponsive NAS folder. The app resolves hostnames using system DNS, `.local` mDNS, and NetBIOS.
-When the NAS IP changes, it checks the new address, normally unmounts the old
-Ego share, and mounts the new address with the saved credentials. A busy share
-stops reconnection; close files or transfers using it and retry. No forced or
-lazy unmount is used. Hostname/IP aliases of the same active server reuse the
-existing mount. SMB reachability is checked before switching mounts.
+When the NAS IP changes, the app mounts the new server at a separate local path
+under `~/.local/share/nas-transfer/connections/<IP>/Ego`. It does not access or
+unmount the stale server as part of reconnecting. NAS data still goes to the same
+`Ego/DDMMYYYY/title` share layout. The connection log shows the active local path.
+Hostname/IP aliases of the same server can reuse its existing mount.
 The mount is at `~/.local/share/nas-transfer/Ego`. The mount operation may show
 Linux's system authorization dialog. The NAS password itself is never requested.
 Shared credentials are embedded in `nas_config.py`; keep the package internal.

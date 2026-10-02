@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
+import nas_transfer_cli as transfer_core
 from nas_config import MOUNT_ROOT, NAS_PASSWORD
 from nas_transfer_cli import (
     TransferCancelled, inventory, mount_nas, mounted_nas, removable_roots, transfer,
@@ -298,8 +299,8 @@ class TransferApp:
         self.lock_controls()
         def worker():
             try:
-                mount_nas(address, authorization='pkexec', cancel=cancel)
-                self.events.put(('connected', (attempt, address)))
+                path = mount_nas(address, authorization='pkexec', cancel=cancel)
+                self.events.put(('connected', (attempt, (address, path))))
             except Exception as error:
                 self.events.put(('connection_error', (attempt, str(error))))
         threading.Thread(target=worker, daemon=True).start()
@@ -379,6 +380,7 @@ class TransferApp:
             self.root.destroy()
 
     def pump(self):
+        global MOUNT_ROOT
         for _ in range(200):
             try:
                 kind, value = self.events.get_nowait()
@@ -417,7 +419,9 @@ class TransferApp:
                 self.connection.set('Connected · Ego' if self.connected else 'Not connected')
                 self.lock_controls()
                 if self.connected:
-                    self.append(f'NAS connected: {value} → {MOUNT_ROOT}')
+                    address, path = value
+                    MOUNT_ROOT = transfer_core.MOUNT_ROOT = path
+                    self.append(f'NAS connected: {address} → {MOUNT_ROOT}')
                 else:
                     self.append(value)
                     self.prompt_nas_address(value)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-version=0.2.2
+version=0.2.3
 command -v dpkg-deb >/dev/null || { echo 'Building requires dpkg-deb (package: dpkg).' >&2; exit 1; }
 staging=$(mktemp -d)
 trap 'rm -rf -- "$staging"' EXIT

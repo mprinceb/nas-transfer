@@ -31,22 +31,24 @@ class ConnectionTests(unittest.TestCase):
         finally:
             timer.join()
 
-    def test_changed_ip_unmounts_then_mounts(self):
+    def test_changed_ip_uses_new_path_without_unmount(self):
         import tempfile
+        import nas_config
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(core, 'MOUNT_ROOT', Path(tmp)/'Ego'), \
+             patch.object(nas_config, 'MOUNT_ROOT', Path(tmp)/'Ego'), \
              patch.object(core, 'mounted_nas', side_effect=[('//192.168.0.222/Ego','cifs'), None, ('//sxd/Ego','cifs')]), \
              patch.object(core, 'mounted_nas_ip', return_value='192.168.0.222'), \
              patch.object(core, 'reachable_nas_ip', return_value='192.168.0.182'), \
              patch.object(core.shutil, 'which', return_value='/usr/sbin/mount.cifs'), \
              patch.object(core, 'connection_command', return_value='') as command:
-            core.mount_nas('smb://sxd')
-            calls=[c.args[0] for c in command.call_args_list]
-            self.assertIn('umount', calls[0])
-            self.assertNotIn('-l', calls[0])
-            self.assertNotIn('-f', calls[0])
-            self.assertIn('mount', calls[1])
-            self.assertIn('ip=192.168.0.182', calls[1][-1])
+            result = core.mount_nas('smb://sxd')
+            self.assertEqual(result, Path(tmp)/'connections'/'192.168.0.182'/'Ego')
+            self.assertEqual(command.call_count, 1)
+            args = command.call_args.args[0]
+            self.assertNotIn('umount', args)
+            self.assertIn(str(result), args)
+            self.assertIn('ip=192.168.0.182', args[-1])
 
     def test_alias_of_current_ip_reuses_mount(self):
         with patch.object(core, 'mounted_nas', return_value=('//192.168.0.182/Ego','cifs')), \
@@ -56,16 +58,14 @@ class ConnectionTests(unittest.TestCase):
             core.mount_nas('smb://sxd')
             command.assert_not_called()
 
-    def test_busy_old_mount_never_mounts_over_it(self):
-        with patch.object(core, 'mounted_nas', return_value=('//192.168.0.222/Ego','cifs')), \
+    def test_occupied_new_path_is_not_overmounted(self):
+        with patch.object(core, 'mounted_nas', side_effect=[('//old/Ego','cifs'), ('/dev/sda1','ext4')]), \
              patch.object(core, 'mounted_nas_ip', return_value='192.168.0.222'), \
              patch.object(core, 'reachable_nas_ip', return_value='192.168.0.182'), \
-             patch.object(core.shutil, 'which', return_value='/usr/sbin/mount.cifs'), \
-             patch.object(core, 'connection_command', side_effect=RuntimeError('target is busy')) as command:
-            with self.assertRaisesRegex(RuntimeError, 'Close files or transfers'):
+             patch.object(core, 'connection_command') as command:
+            with self.assertRaisesRegex(RuntimeError, 'occupied'):
                 core.mount_nas('smb://sxd')
-            self.assertEqual(command.call_count, 1)
-            self.assertIn('umount', command.call_args.args[0])
+            command.assert_not_called()
 
     def test_netbios_fallback(self):
         with patch.object(core.shutil, 'which', return_value='/usr/bin/nmblookup'), \
