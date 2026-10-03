@@ -4,7 +4,7 @@ A small Tkinter utility for Linux that copies files under a mounted removable dr
 
 ## Windows 10 / 11
 
-1. Copy `dist/EgoTrinetTransfer-0.3.0-Windows.zip` to the Windows computer.
+1. Copy `dist/EgoTrinetTransfer-0.4.0-Windows.zip` to the Windows computer.
 2. Right-click the ZIP and choose **Extract All**.
 3. Double-click **Install.cmd** inside the extracted folder.
 4. Open **Ego Trinet Transfer** from the desktop or Start menu.
@@ -44,11 +44,11 @@ that end-to-end result.
 
 ## Ubuntu / Debian desktop installation
 
-Use `dist/trinet-nas-transfer_0.3.0_linux.tar.gz` on a desktop with apt and
+Use `dist/trinet-nas-transfer_0.4.0_linux.tar.gz` on a desktop with apt and
 Python 3.10 or newer available from its distribution repositories.
 
 ```bash
-tar -xzf trinet-nas-transfer_0.3.0_linux.tar.gz
+tar -xzf trinet-nas-transfer_0.4.0_linux.tar.gz
 bash install.sh
 ```
 
@@ -66,7 +66,7 @@ Run `bash install.sh --check` for a dependency report without installation.
 To install the `.deb` directly and let apt resolve dependencies:
 
 ```bash
-sudo apt install ./trinet-nas-transfer_0.3.0_all.deb
+sudo apt install ./trinet-nas-transfer_0.4.0_all.deb
 ```
 
 The package includes Python/Tkinter, CIFS, PolicyKit, util-linux, mount, and sudo
@@ -117,6 +117,10 @@ You can also run directly with `python3 nas_transfer.py`.
 
 1. Mount the SD cards in your Linux file manager, then click **Rescan cards**.
    The table lists removable/USB mounts containing `Trinet/recording`.
+   The **Video** column shows how much footage each card holds, read from the
+   MP4 headers (one camera of each `_L`/`_R` pair, plus unpaired videos). The
+   summary line totals it for the selected cards, and the log repeats each card's
+   length when its transfer completes. `ffprobe` is used as a fallback if installed.
 2. Use the first column to select up to 15 ready cards. Empty or unreadable cards
    cannot be selected. The first 15 ready cards are selected after a scan.
 3. Enter a shared **Data title**, or double-click a row to give that card its own

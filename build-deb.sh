@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-version=0.3.0
+version=0.4.0
 command -v dpkg-deb >/dev/null || { echo 'Building requires dpkg-deb (package: dpkg).' >&2; exit 1; }
 staging=$(mktemp -d)
 trap 'rm -rf -- "$staging"' EXIT
@@ -9,7 +9,7 @@ chmod 755 "$staging"
 install -d "$staging/DEBIAN" "$staging/usr/lib/trinet-nas-transfer" "$staging/usr/bin" \
   "$staging/usr/share/applications" "$staging/usr/share/icons/hicolor/scalable/apps" \
   "$staging/usr/share/doc/trinet-nas-transfer" "$project_dir/dist"
-for module in nas_transfer.py nas_transfer_cli.py nas_config.py nas_paths.py nas_windows.py; do
+for module in nas_transfer.py nas_transfer_cli.py nas_config.py nas_paths.py nas_windows.py nas_video.py; do
   install -m 644 "$project_dir/$module" "$staging/usr/lib/trinet-nas-transfer/$module"
 done
 cat > "$staging/usr/bin/trinet-nas-transfer" <<'LAUNCHER'

@@ -15,6 +15,7 @@ from nas_config import MOUNT_ROOT, NAS_PASSWORD
 from nas_transfer_cli import (
     TransferCancelled, inventory, mount_nas, mounted_nas, removable_roots, transfer,
 )
+from nas_video import card_video, describe, hm
 
 MAX_CARDS = 15
 
@@ -41,13 +42,18 @@ def scan_cards():
             continue
         seen.add(identity)
         card = dict(source=source, mount=mount, title='', selected=False,
-                    progress=0.0, destination='', phase='Ready', error='')
+                    progress=0.0, destination='', phase='Ready', error='', video=None)
         try:
             files, _ = inventory(source)
             card.update(files=files, size=sum(s[2] for s in files.values()))
             card['phase'] = 'Ready' if files else 'Empty'
         except Exception as error:
             card.update(files={}, size=0, phase='Unreadable', error=str(error))
+        else:
+            try:
+                card['video'] = card_video(source, files)
+            except Exception as error:  # Video length is informational only.
+                card['error'] = f'Could not read video lengths: {error}'
         cards.append(card)
     return cards
 
@@ -65,6 +71,8 @@ def run_batch(jobs, title, keep_source, cancel, notify):
             transfer(card['source'], destination, keep_source,
                      notify=lambda event, key=key: notify(key, event),
                      cancel=cancel, expected=card['files'])
+            if card.get('video'):
+                notify(key, dict(message=f'Transferred {describe(card["video"])}'))
             completed += 1
         except Exception as error:
             phase = 'Stopped' if isinstance(error, TransferCancelled) else 'Failed'
@@ -167,9 +175,9 @@ class TransferApp:
 
         table = ttk.Frame(body)
         table.pack(fill='both', expand=True)
-        columns = ('selected', 'card', 'files', 'size', 'title', 'state', 'progress')
+        columns = ('selected', 'card', 'files', 'size', 'video', 'title', 'state', 'progress')
         self.table = ttk.Treeview(table, columns=columns, show='headings', selectmode='browse', height=4)
-        for name, text, width in zip(columns, ('Use', 'SD card / mount', 'Files', 'Size', 'Title override', 'Status', 'Progress'), (50, 280, 60, 90, 170, 185, 90)):
+        for name, text, width in zip(columns, ('Use', 'SD card / mount', 'Files', 'Size', 'Video', 'Title override', 'Status', 'Progress'), (50, 250, 60, 90, 80, 170, 185, 90)):
             self.table.heading(name, text=text)
             self.table.column(name, width=width, minwidth=45, stretch=name in ('card', 'title', 'state'))
         scrollbar = ttk.Scrollbar(table, orient='vertical', command=self.table.yview)
@@ -214,19 +222,20 @@ class TransferApp:
     def render_card(self, key):
         card = self.cards[key]
         tag = 'complete' if card['phase'].startswith('Complete') else 'failed' if card['phase'] in ('Failed', 'Unreadable') else ''
-        values = ('●' if card['selected'] else '○', str(card['mount']), len(card['files']), size_label(card['size']), card['title'] or 'Use data title', card['phase'], f"{card['progress']:.0%}")
+        values = ('●' if card['selected'] else '○', str(card['mount']), len(card['files']), size_label(card['size']), hm(card['video']['recorded']) if card['video'] and card['video']['count'] else '—', card['title'] or 'Use data title', card['phase'], f"{card['progress']:.0%}")
         self.table.item(key, values=values, tags=(tag,))
 
     def update_summary(self):
         selected = [c for c in self.cards.values() if c['selected']]
-        self.summary.set(f'{len(self.cards)} cards found  ·  {len(selected)}/15 selected  ·  {size_label(sum(c["size"] for c in selected))}')
+        video = sum(c['video']['recorded'] for c in selected if c['video'])
+        self.summary.set(f'{len(self.cards)} cards found  ·  {len(selected)}/15 selected  ·  {size_label(sum(c["size"] for c in selected))}  ·  {hm(video)} of video')
 
     def refresh_drives(self):
         if self.busy or self.scanning:
             return
         self.scanning = True
         self.lock_controls()
-        self.summary.set('Scanning mounted removable drives…')
+        self.summary.set('Scanning mounted removable drives and reading video lengths…')
         def worker():
             try:
                 self.events.put(('scan', scan_cards()))
@@ -397,6 +406,8 @@ class TransferApp:
                     self.render_card(key)
                     if card['error']:
                         self.append(f'{card["mount"]}: {card["error"]}')
+                    elif card['video'] and card['video']['count']:
+                        self.append(f'{card["mount"]}: {describe(card["video"])}')
                 self.scanning = False
                 self.select_all()
                 self.lock_controls()

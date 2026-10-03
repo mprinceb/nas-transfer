@@ -3,7 +3,7 @@
 set -euo pipefail
 export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 installer_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-package_name=trinet-nas-transfer_0.3.0_all.deb
+package_name=trinet-nas-transfer_0.4.0_all.deb
 case "${1:-}" in
   '') check_only=false ;;
   --check) check_only=true ;;

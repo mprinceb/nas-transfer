@@ -31,7 +31,7 @@ if (-not $Python) {
     if (-not $Python) { throw 'Python/Tkinter could not be verified after installation.' }
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-foreach ($file in @('nas_transfer.py','nas_transfer_cli.py','nas_windows.py','nas_paths.py','nas_config.py','README.md')) {
+foreach ($file in @('nas_transfer.py','nas_transfer_cli.py','nas_windows.py','nas_paths.py','nas_config.py','nas_video.py','README.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $InstallDir -Force
 }
 $PythonW = Join-Path (Split-Path $Python) 'pythonw.exe'

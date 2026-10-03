@@ -400,6 +400,11 @@ def main():
         if not title or title in ('.', '..') or any(c in title for c in '/\\\x00'):
             raise ValueError('Enter a nonempty data title without slashes.')
         destination = MOUNT_ROOT / datetime.datetime.now().strftime('%d%m%Y') / title
+        try:
+            from nas_video import card_video, describe
+            print(f'Card holds {describe(card_video(source, inventory(source)[0]))}.', flush=True)
+        except Exception as error:  # Video length is informational only.
+            print(f'Could not read video lengths: {error}', flush=True)
         transfer_started = True
         transfer(source, destination, args.keep_source)
     except (Exception, KeyboardInterrupt) as error:
