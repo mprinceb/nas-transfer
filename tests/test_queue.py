@@ -61,6 +61,61 @@ class QueueTests(unittest.TestCase):
             core.transfer(card['source'], self.nas / 'test', notify=event)
         self.assertTrue((card['source'] / 'recording.bin').exists())
 
+    def test_sampled_corruption_never_clears_source(self):
+        size = core.CHUNK + 123
+        for offset in (0, (size - core.VERIFY_SAMPLE) // 2, size - 1):
+            with self.subTest(offset=offset):
+                card = self.card(offset + 100)
+                (card['source'] / 'recording.bin').write_bytes(b'a' * size)
+                destination = self.nas / f'sample-{offset}'
+                def event(event):
+                    if event.get('phase') == 'Verifying':
+                        with (destination / 'recording.bin').open('r+b') as stream:
+                            stream.seek(offset)
+                            stream.write(b'b')
+                with self.assertRaisesRegex(RuntimeError, 'Verification failed'):
+                    core.transfer(card['source'], destination, notify=event)
+                self.assertTrue((card['source'] / 'recording.bin').exists())
+
+    def test_bounded_readback_without_source_reread(self):
+        card = self.card(40)
+        content = b'a' * (core.CHUNK + core.VERIFY_SAMPLE // 2)
+        (card['source'] / 'recording.bin').write_bytes(content)
+        (card['source'] / 'zero.bin').touch()
+        observed = []
+        original_verify = core.verify_samples
+        def verify(path, samples, check_cancel):
+            observed.append(sum(length for _, length, _ in samples))
+            return original_verify(path, samples, check_cancel)
+        real_open = Path.open
+        source_reads = []
+        def track_open(path, mode='r', *args, **kwargs):
+            if mode == 'rb' and path.is_relative_to(card['source']):
+                source_reads.append(path.name)
+            return real_open(path, mode, *args, **kwargs)
+        with patch.object(core, 'verify_samples', side_effect=verify), patch.object(Path, 'open', track_open):
+            destination = core.transfer(card['source'], self.nas / 'bounded', keep_source=True, notify=lambda event: None)
+        self.assertEqual(sorted(source_reads), ['recording.bin', 'zero.bin'])
+        self.assertEqual(sum(observed), 3 * core.VERIFY_SAMPLE)
+        self.assertEqual((destination / 'recording.bin').read_bytes(), content)
+        self.assertEqual((destination / 'zero.bin').stat().st_size, 0)
+
+    def test_source_change_before_cleanup_keeps_source(self):
+        card = self.card(41)
+        def event(event):
+            if event.get('phase') == 'Verifying':
+                (card['source'] / 'recording.bin').write_bytes(b'changed')
+        with self.assertRaisesRegex(RuntimeError, 'Verification failed'):
+            core.transfer(card['source'], self.nas / 'changed', notify=event)
+        self.assertTrue((card['source'] / 'recording.bin').exists())
+
+    def test_flush_failure_keeps_source(self):
+        card = self.card(42)
+        with patch.object(core.os, 'fsync', side_effect=OSError('flush failed')):
+            with self.assertRaisesRegex(OSError, 'flush failed'):
+                core.transfer(card['source'], self.nas / 'flush', notify=lambda event: None)
+        self.assertTrue((card['source'] / 'recording.bin').exists())
+
     def test_keep_source(self):
         card = self.card(0)
         core.transfer(card['source'], self.nas / 'test', keep_source=True, notify=lambda event: None)

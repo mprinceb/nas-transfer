@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trinet-nas-transfer"
-version = "0.2.3"
-description = "Linux desktop utility for transferring Trinet recordings to a NAS"
+version = "0.3.0"
+description = "Desktop utility for transferring Trinet recordings to a NAS"
 readme = "README.md"
 requires-python = ">=3.10"
 # Runtime Python imports use the standard library. Tkinter and CIFS tools
@@ -17,4 +17,4 @@ trinet-nas-transfer = "nas_transfer:main"
 trinet-nas-transfer-cli = "nas_transfer_cli:main"
 
 [tool.setuptools]
-py-modules = ["nas_transfer", "nas_transfer_cli", "nas_config", "nas_paths"]
+py-modules = ["nas_transfer", "nas_transfer_cli", "nas_config", "nas_paths", "nas_windows"]

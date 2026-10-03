@@ -1,14 +1,54 @@
 # Trinet NAS Transfer
 
-A small Tkinter utility for Linux that copies files under a mounted removable drive's `Trinet/recording/` folder to `Ego/DDMMYYYY/<title>/` on an SMB share named `Ego`. It shows byte progress, verifies each destination file with SHA-256, then removes only the files in the source snapshot. When a title already exists, both apps automatically create title-2, title-3, and so on, preserving existing folders.
+A small Tkinter utility for Linux that copies files under a mounted removable drive's `Trinet/recording/` folder to `Ego/DDMMYYYY/<title>/` on an SMB share named `Ego`. It shows byte progress, flushes each destination file and verifies its size plus SHA-256 content samples, then removes only the files in the source snapshot. When a title already exists, both apps automatically create title-2, title-3, and so on, preserving existing folders.
+
+## Windows 10 / 11
+
+1. Copy `dist/EgoTrinetTransfer-0.3.0-Windows.zip` to the Windows computer.
+2. Right-click the ZIP and choose **Extract All**.
+3. Double-click **Install.cmd** inside the extracted folder.
+4. Open **Ego Trinet Transfer** from the desktop or Start menu.
+
+The installer checks Python 3.10+ and Tkinter. If missing, it installs Python
+3.12 for the current user using Windows Package Manager (`winget`). Internet
+access is required for that download. If winget is unavailable, install Microsoft's
+App Installer or Python from python.org with Tcl/Tk support, then retry.
+No pip packages or Linux utilities are required on Windows.
+
+The application is installed at `%LOCALAPPDATA%\EgoTrinetTransfer`.
+Run the installer again to update it. To uninstall, delete that folder and the
+Ego Trinet Transfer desktop/Start-menu shortcuts. NAS and SD-card data are separate.
+
+Use `smb://sxd`, `smb://192.168.0.182/Ego`, or `\\sxd\Ego` in the NAS field.
+The app authenticates with the saved account through the Windows SMB API and
+uses the UNC share directly, without consuming a drive letter. Credentials are
+not passed on command lines. It reconnects on launch; no boot-time service is added.
+If Windows already has a session to this server under another account, the app
+reports a credentials conflict without disconnecting unrelated Windows sessions.
+
+Mount the SD cards so they appear in Explorer, then click **Rescan cards**.
+Removable drives and USB/SD/MMC disks with drive letters are detected; the app
+looks for `Trinet/recording` and supports up to 15 selected cards. Transfers remain
+sequential and are verified before source cleanup. Double-click a card row for
+its individual data title. **Keep source after verification** retains the card data.
+
+For the CLI, run `%LOCALAPPDATA%\EgoTrinetTransfer\Ego-CLI.cmd` in a terminal.
+This is a Python application installer, not a standalone compiled `.exe`.
+Build the ZIP on Linux or Windows with `python build-windows.py`.
+
+Windows integration uses Microsoft's [WNetAddConnection2W](https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/nf-winnetwk-wnetaddconnection2w)
+and [GetDriveTypeW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdrivetypew) APIs.
+Native Windows installation, SMB authentication, and physical card transfer still
+require testing on a Windows PC; Linux and mocked Windows checks do not establish
+that end-to-end result.
 
 ## Ubuntu / Debian desktop installation
 
-Use `dist/trinet-nas-transfer_0.2.3_linux.tar.gz` on a desktop with apt and
+Use `dist/trinet-nas-transfer_0.3.0_linux.tar.gz` on a desktop with apt and
 Python 3.10 or newer available from its distribution repositories.
 
 ```bash
-tar -xzf trinet-nas-transfer_0.2.3_linux.tar.gz
+tar -xzf trinet-nas-transfer_0.3.0_linux.tar.gz
 bash install.sh
 ```
 
@@ -26,7 +66,7 @@ Run `bash install.sh --check` for a dependency report without installation.
 To install the `.deb` directly and let apt resolve dependencies:
 
 ```bash
-sudo apt install ./trinet-nas-transfer_0.2.3_all.deb
+sudo apt install ./trinet-nas-transfer_0.3.0_all.deb
 ```
 
 The package includes Python/Tkinter, CIFS, PolicyKit, util-linux, mount, and sudo
@@ -136,7 +176,13 @@ trinet-nas-transfer-cli --source /media/user/SDCARD --title kitchen-session --ke
 trinet-nas-transfer-cli --nas smb://sxd --title kitchen-session
 ```
 
-Progress covers copying, reading back the NAS copy, and rechecking the source.
+Progress tracks copied bytes and stays below 100% until verification and cleanup finish.
+After flushing each file, verification checks its size and compares up to three
+64 KiB samples (beginning, middle, end) against bytes captured during copying.
+Files up to 192 KiB are checked in full. Source metadata and the complete source
+inventory are rechecked before cleanup, without rereading source contents.
+This avoids two full read passes, but corruption outside sampled regions can go
+undetected; it is a completion check, not full-file integrity verification.
 By default, verified source files are deleted after all files pass verification.
 `--keep-source` disables deletion. Existing destination folders are never
 reused or overwritten; a numbered suffix is added automatically. Failed or interrupted copies remain on the NAS for manual
